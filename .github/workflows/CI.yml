@@ -1,0 +1,158 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: go.mod
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc musl-dev sqlite3
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.58.2
+          golangci-lint --version
+
+      - name: Run linters
+        run: golangci-lint run --timeout=5m ./...
+
+      - name: Verify configs
+        run: |
+          echo "Config files:"
+          ls -la config/
+          [ -f config/prod.yml ] || exit 1
+
+      - name: Run unit tests
+        run: |
+          go test -v -coverprofile=coverage.out $(go list ./... | grep -v "/tests")
+          go tool cover -func=coverage.out | grep total
+
+      - name: Run integration tests
+        env:
+          AUTH_PASS: ${{ secrets.AUTH_PASS || 'test_password_ci' }}
+          CONFIG_PATH: "config/prod.yml"
+        run: |
+          mkdir -p storage
+          touch storage/storage.db
+          chmod 666 storage/storage.db
+          
+          go build -o url-shortener ./cmd/url-shortener
+          
+          ./url-shortener > server.log 2>&1 &
+          SERVER_PID=$!
+          
+          echo "Waiting for server to start..."
+          for i in {1..10}; do
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep 200; then
+              echo "Server started successfully"
+              break
+            fi
+            sleep 1
+            if [ $i -eq 10 ]; then
+              echo "Server failed to start after 10 seconds"
+              echo "Server logs:"
+              cat server.log
+              kill $SERVER_PID || true
+              exit 1
+            fi
+          done
+          
+          go test -v ./tests/...
+          TEST_EXIT_CODE=$?
+          
+          kill $SERVER_PID || true
+          cat server.log
+          exit $TEST_EXIT_CODE
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+
+      - name: Get coverage percentage
+        id: coverage
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "COVERAGE=${COVERAGE}" >> $GITHUB_OUTPUT
+
+      - name: Get short SHA
+        id: short_sha
+        run: |
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Notify Telegram (lint-and-test)
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILED' }}* ${{ github.repository }} - Lint & Test
+            ▸ Event: ${{ github.event_name }}
+            ▸ Branch: ${{ github.ref_name || github.ref }}
+            ▸ Commit: ${{ steps.short_sha.outputs.SHORT_SHA }}
+            ▸ Coverage: ${{ steps.coverage.outputs.COVERAGE }}
+            ▸ Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create config directory
+        run: mkdir -p config && touch config/local.yml
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/url-shortener:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/url-shortener:latest
+          secrets: |
+            AUTH_PASS=${{ secrets.AUTH_PASS }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            AUTH_PASS=${{ secrets.AUTH_PASS }}
+
+      - name: Notify Telegram (build)
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            *${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILED' }}* ${{ github.repository }} - Docker Build
+            ▸ Image: ghcr.io/${{ github.repository_owner }}/url-shortener:${{ steps.short_sha.outputs.SHORT_SHA }}
+            ▸ Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

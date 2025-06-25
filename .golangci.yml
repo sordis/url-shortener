@@ -1,0 +1,40 @@
+---
+run:
+  go: '1.23'
+  modules-download-mode: readonly
+  build-tags: [sqlite3]
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gosec
+
+linters-settings:
+  errcheck:
+    check-blank: false
+    check-type-assertions: false
+    check-err-return: false
+    exclude-functions:
+      - fmt:.*
+      - io:Close
+      - os:.*
+    ignore: ""
+  typecheck:
+    skip-packages:
+      - ".*/mocks/.*"
+
+issues:
+  exclude-use-default: true
+  exclude-rules:
+    - path: internal/.*/mocks/.*\.go
+      linters:
+        - typecheck
+        - errcheck
+        - govet
+    - path: .*_test\.go
+      linters: [typecheck]
+    - path: internal/storage/sqllite/.*
+      linters: [typecheck]
