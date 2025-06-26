@@ -38,27 +38,26 @@ jobs:
           ls -la config/
           [ -f config/prod.yml ] || exit 1
 
-      - name: Install coverage tools
+      - name: Run tests with coverage
+        env:
+          AUTH_PASS: ${{ secrets.AUTH_PASS || 'test_password_ci' }}
         run: |
-          go install github.com/axw/gocov/gocov@latest
-          go install github.com/AlekSi/gocov-xml@latest
-
-      - name: Run unit tests
-        run: |
-          go test -v -coverprofile=coverage.out $(go list ./... | grep -v "/tests")
-          go tool cover -func=coverage.out | grep total
-
-      - name: Convert to LCOV
-        run: |
-          gocov convert coverage.out > coverage.json
-          gocov-lcov coverage.json > coverage.lcov
+          # Запуск тестов с покрытием
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+          
+          # Конвертация в формат lcov (альтернативный вариант)
+          go tool cover -html=coverage.out -o coverage.html
+          
+          # Вывод информации о покрытии
+          go tool cover -func=coverage.out
 
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path-to-lcov: ./coverage.lcov
+          path-to-lcov: ./coverage.out
           flag-name: unittests
+          parallel: false
 
       - name: Run integration tests
         env:
