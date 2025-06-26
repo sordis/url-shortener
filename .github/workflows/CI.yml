@@ -8,6 +8,10 @@ on:
     branches: [master]
   workflow_dispatch:
 
+env:
+  GO_VERSION: "1.24"
+  GOLANGCI_VERSION: "v1.58.2"
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -18,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: go.mod
 
@@ -27,22 +31,16 @@ jobs:
 
       - name: Install golangci-lint
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.58.2
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${{ env.GOLANGCI_VERSION }}
           golangci-lint --version
 
       - name: Run linters
         run: golangci-lint run --timeout=5m ./...
 
-      - name: Verify configs
-        run: |
-          echo "Config files:"
-          ls -la config/
-          [ -f config/prod.yml ] || exit 1
-
       - name: Prepare test config
         run: |
-          mkdir -p config
-          cat > config/test_config.yml <<EOL
+          mkdir -p test_configs
+          cat > test_configs/test_config.yml <<EOL
           env: test
           storage_path: "/tmp/test.db"
           http_server:
@@ -56,8 +54,10 @@ jobs:
       - name: Run unit tests with coverage
         env:
           AUTH_PASS: ${{ secrets.AUTH_PASS || 'test_password_ci' }}
-          CONFIG_PATH: "config/test_config.yml"
+          CONFIG_PATH: "${{ github.workspace }}/test_configs/test_config.yml"
         run: |
+          echo "Using CONFIG_PATH: $CONFIG_PATH"
+          ls -la test_configs/
           go test -coverprofile=coverage.out -covermode=atomic $(go list ./... | grep -v "/tests")
           go tool cover -func=coverage.out | grep total
 
@@ -84,43 +84,73 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Run integration tests
         env:
           AUTH_PASS: ${{ secrets.AUTH_PASS || 'test_password_ci' }}
           CONFIG_PATH: "config/prod.yml"
         run: |
+          # Подготовка окружения
           mkdir -p storage
           touch storage/storage.db
           chmod 666 storage/storage.db
           
-          go build -o url-shortener ./cmd/url-shortener
+          # Создаем конфиг
+          cat > $CONFIG_PATH <<EOL
+          env: prod
+          storage_path: "./storage/storage.db"
+          http_server:
+            address: ":8080"
+            timeout: 10s
+            idle_timeout: 60s
+            user: "admin"
+            password: "$AUTH_PASS"
+          EOL
           
+          # Собираем сервер
+          echo "Building server..."
+          go build -v -o url-shortener ./cmd/url-shortener
+          
+          # Запускаем сервер
+          echo "Starting server..."
           ./url-shortener > server.log 2>&1 &
           SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
           
+          # Ждем запуска сервера
           echo "Waiting for server to start..."
-          for i in {1..10}; do
+          for i in {1..30}; do
             if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep 200; then
               echo "Server started successfully"
               break
             fi
             sleep 1
-            if [ $i -eq 10 ]; then
-              echo "Server failed to start after 10 seconds"
+            if [ $i -eq 30 ]; then
+              echo "::error::Server failed to start after 30 seconds"
               echo "Server logs:"
               cat server.log
+              echo "Running processes:"
+              ps aux
               kill $SERVER_PID || true
               exit 1
             fi
           done
           
+          # Запускаем тесты
+          echo "Running integration tests..."
           go test -v ./tests/...
           TEST_EXIT_CODE=$?
           
+          # Останавливаем сервер
+          echo "Stopping server..."
           kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+          
+          # Выводим логи сервера
+          echo "Server logs:"
           cat server.log
+          
           exit $TEST_EXIT_CODE
 
   build-and-push:
@@ -171,13 +201,26 @@ jobs:
           SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
 
+      - name: Get status
+        id: status
+        run: |
+          if [ "${{ needs.unit-tests.result }}" == "success" ] && \
+             [ "${{ needs.integration-tests.result }}" == "success" ] && \
+             [ "${{ needs.build-and-push.result }}" == "success" ]; then
+            echo "RESULT=SUCCESS" >> $GITHUB_OUTPUT
+            echo "EMOJI=✅" >> $GITHUB_OUTPUT
+          else
+            echo "RESULT=FAILURE" >> $GITHUB_OUTPUT
+            echo "EMOJI=❌" >> $GITHUB_OUTPUT
+          fi
+
       - name: Notify Telegram
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            *${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILED' }}* ${{ github.repository }} - CI/CD Results
+            *${{ steps.status.outputs.EMOJI }} ${{ steps.status.outputs.RESULT }}* ${{ github.repository }} - CI/CD Results
             ▸ Event: ${{ github.event_name }}
             ▸ Branch: ${{ github.ref_name || github.ref }}
             ▸ Commit: ${{ steps.short_sha.outputs.SHORT_SHA }}
