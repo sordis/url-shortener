@@ -1,6 +1,6 @@
 # URL Shortener Service
 
-[![CI Status](https://github.com/sordis/url-shortener/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/sordis/url-shortener/actions/workflows/ci.yml)
+[![CI Status](https://github.com/sordis/url-shortener/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/sordis/url-shortener/actions/workflows/CI.yml)
 ![Go Version](https://img.shields.io/github/go-mod/go-version/sordis/url-shortener)
 [![Coverage Status](https://coveralls.io/repos/github/sordis/url-shortener/badge.svg?branch=master)](https://coveralls.io/github/sordis/url-shortener?branch=master)
 ## Описание
