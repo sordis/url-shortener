@@ -2,3 +2,5 @@
 /.idea
 .mockery.yml
 /config/local.yml
+coverage.html
+coverage.out
