@@ -39,9 +39,24 @@ jobs:
           ls -la config/
           [ -f config/prod.yml ] || exit 1
 
+      - name: Prepare test config
+        run: |
+          mkdir -p config
+          cat > config/test_config.yml <<EOL
+          env: test
+          storage_path: "/tmp/test.db"
+          http_server:
+            address: ":8080"
+            timeout: 5s
+            idle_timeout: 30s
+            user: "admin"
+            password: "testpass"
+          EOL
+
       - name: Run unit tests with coverage
         env:
           AUTH_PASS: ${{ secrets.AUTH_PASS || 'test_password_ci' }}
+          CONFIG_PATH: "config/test_config.yml"
         run: |
           go test -coverprofile=coverage.out -covermode=atomic $(go list ./... | grep -v "/tests")
           go tool cover -func=coverage.out | grep total
@@ -148,6 +163,7 @@ jobs:
   notify:
     needs: [unit-tests, integration-tests, build-and-push]
     runs-on: ubuntu-latest
+    if: always()
     steps:
       - name: Get short SHA
         id: short_sha
