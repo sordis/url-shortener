@@ -15,8 +15,10 @@ func TestMustLoadConfig(t *testing.T) {
 
 	t.Cleanup(func() {
 		// Восстанавливаем оригинальные значения после теста
-		os.Setenv("CONFIG_PATH", originalConfigPath)
-		os.Setenv("HTTP_SERVER_PASSWORD", originalPassword)
+		err := os.Setenv("CONFIG_PATH", originalConfigPath)
+		require.NoError(t, err)
+		errP := os.Setenv("HTTP_SERVER_PASSWORD", originalPassword)
+		require.NoError(t, errP)
 	})
 
 	t.Run("successful config load", func(t *testing.T) {
@@ -37,9 +39,10 @@ http_server:
 		err := os.WriteFile(configPath, []byte(configContent), 0644)
 		require.NoError(t, err)
 
-		// Используем os.Setenv вместо t.Setenv для лучшей совместимости
-		os.Setenv("CONFIG_PATH", configPath)
-		os.Setenv("HTTP_SERVER_PASSWORD", "envpass")
+		errConf := os.Setenv("CONFIG_PATH", configPath)
+		require.NoError(t, errConf)
+		errPass := os.Setenv("HTTP_SERVER_PASSWORD", "envpass")
+		require.NoError(t, errPass)
 
 		cfg := MustLoadConfig()
 
