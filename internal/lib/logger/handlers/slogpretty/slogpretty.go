@@ -6,33 +6,49 @@ import (
 	"io"
 	stdLog "log"
 	"log/slog"
+	"sync"
 
 	"github.com/fatih/color"
 )
 
 type PrettyHandlerOptions struct {
-	SlogOpts *slog.HandlerOptions
+	SlogOpts   *slog.HandlerOptions
+	ForceColor bool
 }
 
 type PrettyHandler struct {
-	opts PrettyHandlerOptions
-	slog.Handler
-	l     *stdLog.Logger
-	attrs []slog.Attr
+	opts   PrettyHandlerOptions
+	mu     sync.Mutex
+	l      *stdLog.Logger
+	attrs  []slog.Attr
+	groups []string
 }
 
-func (opts PrettyHandlerOptions) NewPrettyHandler(
-	out io.Writer,
-) *PrettyHandler {
-	h := &PrettyHandler{
-		Handler: slog.NewJSONHandler(out, opts.SlogOpts),
-		l:       stdLog.New(out, "", 0),
+func (opts PrettyHandlerOptions) NewPrettyHandler(out io.Writer) *PrettyHandler {
+	if opts.SlogOpts == nil {
+		opts.SlogOpts = &slog.HandlerOptions{}
 	}
 
-	return h
+	color.NoColor = false
+	if opts.ForceColor {
+		color.NoColor = false
+	}
+
+	return &PrettyHandler{
+		opts:  opts,
+		l:     stdLog.New(out, "", 0),
+		attrs: make([]slog.Attr, 0),
+	}
+}
+
+func (h *PrettyHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.opts.SlogOpts.Level.Level()
 }
 
 func (h *PrettyHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	level := r.Level.String() + ":"
 
 	switch r.Level {
@@ -46,53 +62,70 @@ func (h *PrettyHandler) Handle(_ context.Context, r slog.Record) error {
 		level = color.RedString(level)
 	}
 
-	fields := make(map[string]interface{}, r.NumAttrs())
-
+	fields := make(map[string]any)
 	r.Attrs(func(a slog.Attr) bool {
-		fields[a.Key] = a.Value.Any()
-
+		h.addAttr(fields, a)
 		return true
 	})
 
 	for _, a := range h.attrs {
-		fields[a.Key] = a.Value.Any()
+		h.addAttr(fields, a)
 	}
 
 	var b []byte
-	var err error
-
 	if len(fields) > 0 {
+		var err error
 		b, err = json.MarshalIndent(fields, "", "  ")
 		if err != nil {
 			return err
 		}
 	}
 
-	timeStr := r.Time.Format("[15:05:05.000]")
+	timeStr := r.Time.Format("[15:04:05.000]")
 	msg := color.CyanString(r.Message)
+	jsonStr := color.WhiteString(string(b))
 
 	h.l.Println(
 		timeStr,
 		level,
 		msg,
-		color.WhiteString(string(b)),
+		jsonStr,
 	)
 
 	return nil
 }
 
+func (h *PrettyHandler) addAttr(m map[string]any, a slog.Attr) {
+	key := a.Key
+	if len(h.groups) > 0 {
+		key = h.groups[len(h.groups)-1] + "." + key
+	}
+	m[key] = a.Value.Any()
+}
+
 func (h *PrettyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return h
+	}
 	return &PrettyHandler{
-		Handler: h.Handler,
-		l:       h.l,
-		attrs:   attrs,
+		opts:   h.opts,
+		l:      h.l,
+		attrs:  append(h.attrs, attrs...),
+		groups: h.groups,
 	}
 }
 
 func (h *PrettyHandler) WithGroup(name string) slog.Handler {
-	// TODO: implement
+	if name == "" {
+		return h
+	}
+	groups := make([]string, len(h.groups)+1)
+	copy(groups, h.groups)
+	groups[len(groups)-1] = name
 	return &PrettyHandler{
-		Handler: h.Handler.WithGroup(name),
-		l:       h.l,
+		opts:   h.opts,
+		l:      h.l,
+		attrs:  h.attrs,
+		groups: groups,
 	}
 }

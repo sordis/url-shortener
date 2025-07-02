@@ -32,7 +32,6 @@ func main() {
 
 	log.Info("starting url-shortener", slog.String("env", cfg.Env))
 	log.Debug("debug logging enabled")
-	log.Error("test error")
 	storage, err := sqllite.New(cfg.StoragePath)
 	if err != nil {
 		log.Error("failed to initialize storage", sl.Err(err))
@@ -98,9 +97,8 @@ func setupPrettySlog() *slog.Logger {
 		SlogOpts: &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		},
+		ForceColor: true,
 	}
-
 	handler := opts.NewPrettyHandler(os.Stdout)
-
 	return slog.New(handler)
 }
