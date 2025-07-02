@@ -4,3 +4,5 @@
 /config/local.yml
 coverage.html
 coverage.out
+filtered.out
+coverfilter
