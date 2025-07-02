@@ -1,0 +1,11 @@
+# Исключаем стандартные библиотеки
+/usr/local/go/src/*
+
+# std call
+*log.Fatal*
+*os.Exit*
+
+
+# Исключаем generated-код
+*.pb.go
+/mocks/
