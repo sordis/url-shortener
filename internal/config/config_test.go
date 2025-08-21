@@ -51,4 +51,22 @@ http_server:
 		require.Equal(t, ":8080", cfg.HTTPServer.Address)
 		require.Equal(t, "envpass", cfg.HTTPServer.Password)
 	})
+	t.Run("missing CONFIG_PATH", func(t *testing.T) {
+		os.Unsetenv("CONFIG_PATH")
+
+		require.Panics(t, func() {
+			_ = MustLoadConfig()
+		})
+	})
+
+	t.Run("non-existent config file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "nonexistent.yml")
+
+		os.Setenv("CONFIG_PATH", configPath)
+
+		require.Panics(t, func() {
+			_ = MustLoadConfig()
+		})
+	})
 }

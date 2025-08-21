@@ -1,4 +1,5 @@
 package main
+//gocov:ignore
 
 import (
 	"bufio"
